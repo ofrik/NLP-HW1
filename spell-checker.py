@@ -1,11 +1,25 @@
 import re
 from collections import Counter
-from nltk.tokenize import sent_tokenize
+from nltk.tokenize import sent_tokenize, word_tokenize
 import itertools
 import sys
+import time
+import numpy as np
+import random
 
 reload(sys)
 sys.setdefaultencoding('utf8')
+
+
+def timing(f):
+    def wrap(*args):
+        time1 = time.time()
+        ret = f(*args)
+        time2 = time.time()
+        print '%s function took %0.1f ms' % (f.func_name, (time2 - time1) * 1000.0)
+        return ret
+
+    return wrap
 
 
 def learn_language_model(files, n=3, lm=None):
@@ -51,12 +65,13 @@ def learn_language_model(files, n=3, lm=None):
 
     for file in files:
         with open(file, "r") as f:
-            prev_words = []
             for line in sent_tokenize(f.read()):
+                prev_words = []
                 if line == "":
                     continue
                 cleaned_line = _normalize_text(line)
                 words = [x for x in cleaned_line.split(" ") if x != ""]
+                words = words + [""] * (n - 1)
                 for word in words:
                     if word not in ngrams:
                         ngrams[word] = {}
@@ -171,10 +186,37 @@ def generate_text(lm, m=15, w=None):
     Returns:
         A sequrnce of generated tokens, separated by white spaces (str)
     """
-    """
-    lm:=language model, m:=length of generated text
-    evaluate_text(s,lm)   s=sentence, lm language model
-    """
+
+    n = len(lm[lm.keys()[0]].keys()[0].split(" "))
+
+    def choose_given_context(context):
+        """
+        try to choose a word from the lm given a context, get all the words that has the given context and the number
+        instances of that context for the word. choose by the probability compared to other words
+        :param context: context for the choosing
+        :return: word from the lm that has this context or empty string if there's none
+        """
+        # TODO stringdoc
+        lst = [(key, d.get(context)) for key, d in lm.items() if context in d]
+        total = sum([x[1] for x in lst])
+        probas = [float(x[1]) / total for x in lst]
+        try:
+            return np.random.choice([x[0] for x in lst], 1, probas)[0]
+        except:
+            return ""
+
+    if w is None:
+        w = choose_given_context("")
+
+    sentence = [w]
+
+    for i in range(1, m):
+        context = " ".join(sentence[max(0, i - 2):i])
+        chosen_word = choose_given_context(context)
+        while chosen_word == "":  # if do not know how to continue the sentence, start a new one
+            chosen_word = choose_given_context("")
+        sentence.append(chosen_word)
+    return " ".join(sentence)
 
 
 def _generate_candidates_with_proba(w, errors_dist):
@@ -238,6 +280,7 @@ def correct_word(w, word_counts, errors_dist):
     return best_correction
 
 
+@timing
 def correct_sentence(s, lm, err_dist, c=2, alpha=0.95):
     """ Returns the most probable sentence given the specified sentence, language
     model, error distributions, maximal number of suumed erroneous tokens and likelihood for non-error.
@@ -257,9 +300,9 @@ def correct_sentence(s, lm, err_dist, c=2, alpha=0.95):
 
     """
     sentence_words = [x for x in _normalize_text(s).split(" ") if x != ""]
-    sentence_word_candidates = [_generate_candidates_with_proba(w, err_dist) for w in sentence_words]
-    sentence_candidates = []
-    indexes_to_check = itertools.combinations(range(len(sentence_words)), c)
+    sentence_word_candidates = [_generate_candidates_with_proba(w, err_dist).keys() for w in sentence_words]
+    for i in range(len(sentence_words)):
+        sentence_word_candidates[i].append(sentence_words[i])
 
     cands_cache = {}
 
@@ -279,19 +322,32 @@ def correct_sentence(s, lm, err_dist, c=2, alpha=0.95):
             return all_cands_for_w[x]
         return 0.0
 
+    def generate_sentence_candicate(n):
+        """
+        generate candidate with up to n errors in the sentence
+        :param n: number of maximum errors in a sentence
+        :return: list of candidates as array of words
+        """
+        if n == 0:
+            return sentence_words
+        indexes_to_check = itertools.combinations(range(len(sentence_words)), n)
+        candidates = []
+        for indexes in indexes_to_check:
+            candidate_words = []
+            for i, word in enumerate(sentence_words):
+                if i in indexes:
+                    candidate_words.append(sentence_word_candidates[i])
+                else:
+                    candidate_words.append([word])
+            candidates += itertools.product(*candidate_words)
+        return candidates
+
+    sentence_candidates = generate_sentence_candicate(c)
+
     best_candidate = []
     best_candidate_proba = 0
-    # TODO make it possible to have less errors than c
-    for i1, i2 in indexes_to_check:
-        words1 = sentence_word_candidates[i1].items()
-        words2 = sentence_word_candidates[i2].items()
-        for word1, proba1 in words1:
-            for word2, proba2 in words2:
-                sentence = sentence_words[:]
-                sentence[i1] = word1
-                sentence[i2] = word2
-                sentence_candidates.append(sentence)
-    for candidate in sentence_candidates:
+
+    for j, candidate in enumerate(sentence_candidates):
         candidate_proba = 1
         for i, word in enumerate(candidate):
             word_in_org_sentence = sentence_words[i]
@@ -303,8 +359,12 @@ def correct_sentence(s, lm, err_dist, c=2, alpha=0.95):
             best_candidate = " ".join(candidate)
     return best_candidate
 
-lm_cache = {}
 
+lm_cache = {}
+context_cache = {}
+
+
+# @timing
 def evaluate_text(s, lm):
     """ Returns the likelihood of the specified sentence to be generated by the
     the specified language model.
@@ -317,30 +377,63 @@ def evaluate_text(s, lm):
         The likelihood of the sentence according to the language model (float).
     """
 
-    def get_N_V():
-        if str(lm) not in lm_cache:
-            V = len(lm.keys())
-            N = sum([sum(lm[word].values()) for word in lm.keys()])
-            lm_cache[str(lm)] = N, V
-        return lm_cache[str(lm)]
+    hashkey = hash(frozenset(lm.get("").keys()))
+    if hashkey not in lm_cache:
+        lm_cache[hashkey] = sum([sum(v.values()) for v in lm.values()]), max(
+            [len(x.split(" ")) for x in lm[lm.keys()[0]].keys()])
+    V, n = lm_cache[hashkey]
 
     s = _normalize_text(s)
-    n = len(lm[lm.keys()[0]].keys()[0].split(" "))
+    # n = max([len(x.split(" ")) for x in lm[lm.keys()[0]].keys()])
     s_words = [x for x in s.split(" ") if x != ""]
-    N, V = get_N_V()
+
+    def context_freq(context):
+        if context not in context_cache:
+            context_cache[context] = sum([lm.get(word).get(context, 0) for word in lm.keys()])
+        return context_cache[context]
+
     sentence_proba = 1
-    freq = sum(lm.get(s_words[0], {"": 0}).values())
-    first_word_proba = float(freq + 1) / (N + V)
-    sentence_proba *= first_word_proba
     for i, word in enumerate(s_words):
-        if i == 0:
-            continue
         context = " ".join(s_words[max(0, i - n):i])
-        context_freq = lm.get(word, {"": 0}).get(context, 0)
-        context_total_freq = sum([lm.get(word).get(context, 0) for word in lm.keys()])
-        context_proba = float(context_freq + 1) / (context_total_freq + V)
-        sentence_proba *= context_proba
+        seq_preq = lm.get(word, {"": 0}).get(context, 0)
+        context_total_freq = context_freq(context)
+        if context_total_freq == 0:
+            return 0
+        sentence_proba *= float(seq_preq) / (context_total_freq)  # TODO think about adding smoothing
     return sentence_proba
+
+    # def get_N_V():
+    #     def get_lm_key():
+    #         return hash(frozenset(lm.keys()))
+    #
+    #     lm_key = get_lm_key()
+    #     if lm_key not in lm_cache:
+    #         V = len(lm.keys())
+    #         N = sum([sum(lm[word].values()) for word in lm.keys()])
+    #         lm_cache[lm_key] = N, V
+    #     return lm_cache[lm_key]
+    #
+    # s = _normalize_text(s)
+    # n = len(lm[lm.keys()[0]].keys()[0].split(" "))
+    # s_words = [x for x in s.split(" ") if x != ""]
+    # N, V = get_N_V()
+    # sentence_proba = 1
+    # freq = sum(lm.get(s_words[0], {"": 0}).values())
+    # first_word_proba = float(freq + 1) / (N + V)
+    # sentence_proba *= first_word_proba
+    # for i, word in enumerate(s_words):
+    #     if i == 0:
+    #         continue
+    #     context = " ".join(s_words[max(0, i - n):i])
+    #     if context not in context_cache:
+    #         context_freq = lm.get(word, {"": 0}).get(context, 0)
+    #         context_total_freq = sum([lm.get(word).get(context, 0) for word in lm.keys()])
+    #         context_cache[context] = context_freq, context_total_freq
+    #     else:
+    #         context_freq, context_total_freq = context_cache[context]
+    #     context_proba = float(context_freq + 1) / (context_total_freq + V)
+    #     sentence_proba *= context_proba
+    # return sentence_proba
 
 
 if __name__ == '__main__':
@@ -353,8 +446,13 @@ if __name__ == '__main__':
             words = words + [x for x in cleaned_line.split(" ") if x != ""]
     word_freq = Counter(words)
     correct_word("idae", word_freq, error_dist)
-    print evaluate_text(
+    print(evaluate_text(
         "@Janetlarose1: @realDonaldTrump @FaceTheNation @jdickerson WASHINGTON VERSUS TRUMP  &TRUMPS SUPPORTERS ... #TRUMPDOG",
-        lm)
-    print correct_sentence("how aer yuo?", lm, error_dist)
+        # TODO choose different sentence
+        lm))
+    # for _ in range(5):
+    #     print(generate_text(lm))
+    print(correct_sentence("how aer you", lm, error_dist))
+    print(correct_sentence("how aer yuo", lm, error_dist))
+    print(correct_sentence("how are you", lm, error_dist))  # TODO check why fail here
     pass
