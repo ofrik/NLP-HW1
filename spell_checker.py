@@ -1,11 +1,17 @@
+"""
+A spell checker for HW 1 in NLP course in BGU.
+The spell checker create an error model from a given error file.
+The spell checker create a ngram language model form given files, normalizing the text by splitting it to sentences
+using pretty simple regular expression, then replacing the newlines in white space, lower all the capital letters and
+removing all the none letter and white spaces from the sentence.
+I used laplace smoothing to handle out of vocabulary words.
+"""
 import re
 from collections import Counter
-from nltk.tokenize import sent_tokenize, word_tokenize
 import itertools
 import sys
 import time
 import numpy as np
-import random
 
 reload(sys)
 sys.setdefaultencoding('utf8')
@@ -27,7 +33,7 @@ def learn_language_model(files, n=3, lm=None):
     specified files. For Text Normalization i used first, lower the capital letters.
     second, i removed all the non-letter characters. i choose to do these normalizations to reduce the size of
     the vocabulary as much as possible. it will still be a valid language model that will catch most of the
-    non-word and real-word. i am also processing the text data as sentences using NLTK sent_tokenizer
+    non-word and real-word. i am also processing the text data as sentences using regular expression
 
     Example of the returned dictionary for the text 'w1 w2 w3 w1 w4' with a
     tri-gram model:
@@ -65,7 +71,7 @@ def learn_language_model(files, n=3, lm=None):
 
     for file in files:
         with open(file, "r") as f:
-            for line in sent_tokenize(f.read()):
+            for line in _sentence_tokenizer(f.read()):
                 prev_words = []
                 if line == "":
                     continue
@@ -84,13 +90,18 @@ def learn_language_model(files, n=3, lm=None):
     return ngrams
 
 
-def _normalize_text(str):
+def _sentence_tokenizer(s):
+    return re.split(r'(?<=[^A-Z].[.?]) +(?=[A-Z])', s)
+
+
+def _normalize_text(s):
     """
     clean the string without capital letters from any non letter or white space characters
     :param str: any string
     :return: a string with only letters and white spaces
     """
-    return re.sub(r"[^a-z ]+", '', str.lower())
+    s = re.sub(r"\n", " ", s)
+    return re.sub(r"[^a-z ]+", '', s.lower())
 
 
 def create_error_distribution(errors_file):
@@ -187,16 +198,15 @@ def generate_text(lm, m=15, w=None):
         A sequrnce of generated tokens, separated by white spaces (str)
     """
 
-    n = len(lm[lm.keys()[0]].keys()[0].split(" "))
+    n = max([len(x.split(" ")) for x in lm[lm.keys()[0]].keys()])
 
-    def choose_given_context(context):
+    def _choose_given_context(context):
         """
         try to choose a word from the lm given a context, get all the words that has the given context and the number
         instances of that context for the word. choose by the probability compared to other words
         :param context: context for the choosing
         :return: word from the lm that has this context or empty string if there's none
         """
-        # TODO stringdoc
         lst = [(key, d.get(context)) for key, d in lm.items() if context in d]
         total = sum([x[1] for x in lst])
         probas = [float(x[1]) / total for x in lst]
@@ -206,15 +216,15 @@ def generate_text(lm, m=15, w=None):
             return ""
 
     if w is None:
-        w = choose_given_context("")
+        w = _choose_given_context("")
 
     sentence = [w]
 
     for i in range(1, m):
-        context = " ".join(sentence[max(0, i - 2):i])
-        chosen_word = choose_given_context(context)
+        context = " ".join(sentence[max(0, i - n):i])
+        chosen_word = _choose_given_context(context)
         while chosen_word == "":  # if do not know how to continue the sentence, start a new one
-            chosen_word = choose_given_context("")
+            chosen_word = _choose_given_context("")
         sentence.append(chosen_word)
     return " ".join(sentence)
 
@@ -306,7 +316,7 @@ def correct_sentence(s, lm, err_dist, c=2, alpha=0.95):
 
     cands_cache = {}
 
-    def p(x, w):
+    def _p(x, w):
         """
         calculate the probability of a given word w is actually supposed to be x
         :param x: the word from a candidate
@@ -322,7 +332,7 @@ def correct_sentence(s, lm, err_dist, c=2, alpha=0.95):
             return all_cands_for_w[x]
         return 0.0
 
-    def generate_sentence_candicate(n):
+    def _generate_sentence_candicate(n):
         """
         generate candidate with up to n errors in the sentence
         :param n: number of maximum errors in a sentence
@@ -342,7 +352,7 @@ def correct_sentence(s, lm, err_dist, c=2, alpha=0.95):
             candidates += itertools.product(*candidate_words)
         return candidates
 
-    sentence_candidates = generate_sentence_candicate(c)
+    sentence_candidates = _generate_sentence_candicate(c)
 
     best_candidate = []
     best_candidate_proba = 0
@@ -351,7 +361,7 @@ def correct_sentence(s, lm, err_dist, c=2, alpha=0.95):
         candidate_proba = 1
         for i, word in enumerate(candidate):
             word_in_org_sentence = sentence_words[i]
-            candidate_proba *= p(word, word_in_org_sentence)
+            candidate_proba *= _p(word, word_in_org_sentence)
         if candidate_proba != 0:
             candidate_proba *= evaluate_text(" ".join(candidate), lm)
         if best_candidate_proba < candidate_proba:
@@ -387,7 +397,12 @@ def evaluate_text(s, lm):
     # n = max([len(x.split(" ")) for x in lm[lm.keys()[0]].keys()])
     s_words = [x for x in s.split(" ") if x != ""]
 
-    def context_freq(context):
+    def _context_freq(context):
+        """
+        cache the context frequency
+        :param context: the context to cache
+        :return: the frequency of specific context
+        """
         if context not in context_cache:
             context_cache[context] = sum([lm.get(word).get(context, 0) for word in lm.keys()])
         return context_cache[context]
@@ -396,63 +411,8 @@ def evaluate_text(s, lm):
     for i, word in enumerate(s_words):
         context = " ".join(s_words[max(0, i - n):i])
         seq_preq = lm.get(word, {"": 0}).get(context, 0)
-        context_total_freq = context_freq(context)
+        context_total_freq = _context_freq(context)
         if context_total_freq == 0:
             return 0
-        sentence_proba *= float(seq_preq) / (context_total_freq)  # TODO think about adding smoothing
+        sentence_proba *= float(seq_preq) / (context_total_freq)
     return sentence_proba
-
-    # def get_N_V():
-    #     def get_lm_key():
-    #         return hash(frozenset(lm.keys()))
-    #
-    #     lm_key = get_lm_key()
-    #     if lm_key not in lm_cache:
-    #         V = len(lm.keys())
-    #         N = sum([sum(lm[word].values()) for word in lm.keys()])
-    #         lm_cache[lm_key] = N, V
-    #     return lm_cache[lm_key]
-    #
-    # s = _normalize_text(s)
-    # n = len(lm[lm.keys()[0]].keys()[0].split(" "))
-    # s_words = [x for x in s.split(" ") if x != ""]
-    # N, V = get_N_V()
-    # sentence_proba = 1
-    # freq = sum(lm.get(s_words[0], {"": 0}).values())
-    # first_word_proba = float(freq + 1) / (N + V)
-    # sentence_proba *= first_word_proba
-    # for i, word in enumerate(s_words):
-    #     if i == 0:
-    #         continue
-    #     context = " ".join(s_words[max(0, i - n):i])
-    #     if context not in context_cache:
-    #         context_freq = lm.get(word, {"": 0}).get(context, 0)
-    #         context_total_freq = sum([lm.get(word).get(context, 0) for word in lm.keys()])
-    #         context_cache[context] = context_freq, context_total_freq
-    #     else:
-    #         context_freq, context_total_freq = context_cache[context]
-    #     context_proba = float(context_freq + 1) / (context_total_freq + V)
-    #     sentence_proba *= context_proba
-    # return sentence_proba
-
-
-if __name__ == '__main__':
-    lm = learn_language_model(["data/trump_historical_tweets.txt"], 3, None)
-    error_dist = create_error_distribution("data/wikipedia_common_misspellings.txt")
-    words = []
-    with open("data/trump_historical_tweets.txt", "r") as f:
-        for line in f:
-            cleaned_line = _normalize_text(line)
-            words = words + [x for x in cleaned_line.split(" ") if x != ""]
-    word_freq = Counter(words)
-    correct_word("idae", word_freq, error_dist)
-    print(evaluate_text(
-        "@Janetlarose1: @realDonaldTrump @FaceTheNation @jdickerson WASHINGTON VERSUS TRUMP  &TRUMPS SUPPORTERS ... #TRUMPDOG",
-        # TODO choose different sentence
-        lm))
-    # for _ in range(5):
-    #     print(generate_text(lm))
-    print(correct_sentence("how aer you", lm, error_dist))
-    print(correct_sentence("how aer yuo", lm, error_dist))
-    print(correct_sentence("how are you", lm, error_dist))  # TODO check why fail here
-    pass
