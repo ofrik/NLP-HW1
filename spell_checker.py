@@ -104,7 +104,7 @@ def _normalize_text(s):
     return re.sub(r"[^a-z ]+", '', s.lower())
 
 
-def create_error_distribution(errors_file):
+def create_error_distribution(errors_file, lexicon):
     """ Returns a dictionary {str:dict} where str is in:
     <'deletion', 'insertion', 'transposition', 'substitution'> and the inner dict {tupple: float} represents the confution matrix of the specific errors
     where tupple is (err, corr) and the float is the probability of such an error. Examples of such tupples are ('t', 's'), ('-', 't') and ('ac','ca').
@@ -117,6 +117,8 @@ def create_error_distribution(errors_file):
     Args:
         errors_file (str): full path to the errors file. File format mathces
                             Wikipedia errors list.
+        lexicon (dict): A dictionary of words and their counts derived from
+                        the same corpus used to learn the language model.
 
     Returns:
         A dictionary of error distributions by error type (dict).
@@ -126,8 +128,6 @@ def create_error_distribution(errors_file):
     error_dist = {"deletion": {}, "insertion": {}, "transposition": {}, "substitution": {}}
     with open(errors_file, "r") as f:
         text = f.read()
-        char_counter = Counter(list(_normalize_text(text).lower()))
-        chars_list = []
         for line in text.split("\n"):
             line = line.lower()
             if line == "":
@@ -137,51 +137,129 @@ def create_error_distribution(errors_file):
             correct_words = correct_words.split(", ")
             for correct_word in correct_words:
                 correct_word = _normalize_text(correct_word).strip()
-                chars_list += [correct_word[i:i + 2] for i in range(len(correct_word) - 1)]
-                if len(correct_word) > len(error_word):
-                    # deletion
-                    for i in range(len(correct_word) - 1):
-                        if error_word[i:i + 2] != correct_word[i:i + 2]:
-                            tpl = (error_word[i:i + 1], correct_word[i:i + 2])
-                            if tpl not in error_dist["deletion"]:
-                                error_dist["deletion"][tpl] = 0
-                            error_dist["deletion"][tpl] = error_dist["deletion"][tpl] + 1
-                            break
-                if len(correct_word) < len(error_word):
-                    # insertion
-                    for i in range(len(error_word) - 1):
-                        if error_word[i:i + 2] != correct_word[i:i + 2]:
-                            tpl = (error_word[i:i + 2], correct_word[i:i + 1])
-                            if tpl not in error_dist["insertion"]:
-                                error_dist["insertion"][tpl] = 0
-                            error_dist["insertion"][tpl] = error_dist["insertion"][tpl] + 1
-                            break
-                if len(correct_word) == len(error_word):
-                    # transposition and substitution
-                    for i in range(len(correct_word) - 1):
-                        if error_word[i] == correct_word[i + 1] and error_word[i + 1] == correct_word[i]:
-                            # transposition
-                            tpl = (error_word[i:i + 2], correct_word[i:i + 2])
-                            if tpl not in error_dist["transposition"]:
-                                error_dist["transposition"][tpl] = 0
-                            error_dist["transposition"][tpl] = error_dist["transposition"][tpl] + 1
-                            break
-                        elif error_word[i] != correct_word[i]:
-                            # substitution
-                            tpl = (error_word[i], correct_word[i])
-                            if tpl not in error_dist["substitution"]:
-                                error_dist["substitution"][tpl] = 0
-                            error_dist["substitution"][tpl] = error_dist["substitution"][tpl] + 1
-                            break
-        chars_counter = Counter(chars_list)
+                j = 0
+                i = 0
+                while j < len(correct_word) - 1 and i < len(error_word) - 1:
+                    xy_correct = correct_word[j:j + 2]
+                    x_correct = correct_word[j:j + 1]
+                    xy_error = error_word[i:i + 2]
+                    x_error = error_word[i:i + 1]
+                    letters_left_correct = len(correct_word) - 1 - j
+                    letters_left_error = len(error_word) - 1 - i
+                    if xy_correct == xy_error[::-1] and xy_correct != xy_error:
+                        # transposition
+                        tpl = (xy_error, xy_correct)
+                        if tpl not in error_dist["transposition"]:
+                            error_dist["transposition"][tpl] = 0
+                        error_dist["transposition"][tpl] = error_dist["transposition"][tpl] + 1
+                        j += 2
+                        i += 2
+                        continue
+                    if x_correct != x_error and i == j and i == 0 and letters_left_correct != letters_left_error:
+                        # substitution
+                        tpl = ('', x_correct)
+                        if tpl not in error_dist["substitution"]:
+                            error_dist["substitution"][tpl] = 0
+                        error_dist["substitution"][tpl] = error_dist["substitution"][tpl] + 1
+                        i += 1
+                        continue
+                    if x_correct != x_error and letters_left_correct == letters_left_error:
+                        # substitution
+                        tpl = (x_error, x_correct)
+                        if tpl not in error_dist["substitution"]:
+                            error_dist["substitution"][tpl] = 0
+                        error_dist["substitution"][tpl] = error_dist["substitution"][tpl] + 1
+                        j += 1
+                        i += 1
+                        continue
+                    if x_correct == x_error and xy_correct != xy_error and letters_left_error < letters_left_correct:
+                        # deletion
+                        tpl = (x_error, xy_correct)
+                        if tpl not in error_dist["deletion"]:
+                            error_dist["deletion"][tpl] = 0
+                        error_dist["deletion"][tpl] = error_dist["deletion"][tpl] + 1
+                        i += 1
+                        j += 2
+                        continue
+                    if x_correct == x_error and xy_correct != xy_error and letters_left_error > letters_left_correct:
+                        # insertion
+                        tpl = (xy_error, x_correct)
+                        if tpl not in error_dist["insertion"]:
+                            error_dist["insertion"][tpl] = 0
+                        error_dist["insertion"][tpl] = error_dist["insertion"][tpl] + 1
+                        i += 2
+                        j += 1
+                        continue
+                    # if len(correct_word) > len(error_word):
+                    #     if x_correct != x_error and i == 0:
+                    #         # substitution
+                    #         tpl = (x_error, x_correct)
+                    #         if tpl not in error_dist["substitution"]:
+                    #             error_dist["substitution"][tpl] = 0
+                    #         error_dist["substitution"][tpl] = error_dist["substitution"][tpl] + 1
+                    #         j += 1
+                    #         i += 1
+                    #         continue
+                    #     elif x_correct == x_error and xy_correct != xy_error:
+                    #         # deletion
+                    #         tpl = (x_error, xy_correct)
+                    #         if tpl not in error_dist["deletion"]:
+                    #             error_dist["deletion"][tpl] = 0
+                    #         error_dist["deletion"][tpl] = error_dist["deletion"][tpl] + 1
+                    #         i += 1
+                    #         j += 2
+                    #         continue
+                    # if len(correct_word) < len(error_word):
+                    #     if x_correct == x_error and xy_correct != xy_error:
+                    #         # insertion
+                    #         tpl = (xy_error, x_correct)
+                    #         if tpl not in error_dist["insertion"]:
+                    #             error_dist["insertion"][tpl] = 0
+                    #         error_dist["insertion"][tpl] = error_dist["insertion"][tpl] + 1
+                    #         i += 2
+                    #         j += 1
+                    #         continue
+                    j += 1
+                    i += 1
+
+    def _get_count(s):
+        return sum([word.count(s) * d[""] for word, d in lexicon.items()])
+
+    # chars = list("abcdefghijklmnopqrstuvwxyz")
+    # subs = list(itertools.combinations(chars, 2))
+    # trans = [("".join(x), "".join(x[::-1])) for x in subs]
+    # trans.extend([("".join(x[::-1]), "".join(x)) for x in subs])
+    # dels = [(x[0], "".join(x)) for x in itertools.product(*[chars+[""], chars])]
+    # adds = [("".join(x), x[0]) for x in itertools.product(*[chars, chars])]
+    #
+    # for tuple in subs:
+    #     if tuple not in error_dist["substitution"]:
+    #         error_dist["substitution"][tuple] = 0
+    # for tuple in trans:
+    #     if tuple not in error_dist["transposition"]:
+    #         error_dist["transposition"][tuple] = 0
+    # for tuple in dels:
+    #     if tuple not in error_dist["deletion"]:
+    #         error_dist["deletion"][tuple] = 0
+    # for tuple in adds:
+    #     if tuple not in error_dist["insertion"]:
+    #         error_dist["insertion"][tuple] = 0
+
+    total_errors = sum(sum(error_dist[key].values()) for key in error_dist.keys())
+
     for (err, corr), value in error_dist["deletion"].items():
-        error_dist["deletion"][(err, corr)] = float(value) / chars_counter.get(corr)
+        total = _get_count(corr)
+        error_dist["deletion"][(err, corr)] = float(value + 1) / (total + total_errors)
     for (err, corr), value in error_dist["insertion"].items():
-        error_dist["insertion"][(err, corr)] = float(value) / char_counter.get(corr)
+        total = _get_count(corr)
+        error_dist["insertion"][(err, corr)] = float(value + 1) / (total + total_errors)
     for (err, corr), value in error_dist["transposition"].items():
-        error_dist["transposition"][(err, corr)] = float(value) / chars_counter.get(corr)
+        total = _get_count(corr)
+        error_dist["transposition"][(err, corr)] = float(value + 1) / (total + total_errors)
     for (err, corr), value in error_dist["substitution"].items():
-        error_dist["substitution"][(err, corr)] = float(value) / char_counter.get(corr)
+        total = _get_count(corr)
+        error_dist["substitution"][(err, corr)] = float(value + 1) / (total + total_errors)
+
     return error_dist
 
 
@@ -278,11 +356,12 @@ def correct_word(w, word_counts, errors_dist):
         The most probable correction (str).
     """
     correction_proba = _generate_candidates_with_proba(w, errors_dist)
+    N, V = sum([x[""] for x in word_counts.values()]), len(word_counts)
 
     best_correction = None
     best_correction_score = 0
     for word, proba in correction_proba.items():
-        word_proba = float(word_counts[word] + 1) / (sum(word_counts.values()) + len(word_counts))
+        word_proba = float(word_counts.get(word, {"": 0})[""] + 1) / (N + V)
         score = word_proba * proba
         if score > best_correction_score:
             best_correction_score = score
@@ -357,7 +436,7 @@ def correct_sentence(s, lm, err_dist, c=2, alpha=0.95):
     best_candidate = []
     best_candidate_proba = 0
 
-    for j, candidate in enumerate(sentence_candidates):
+    for j, candidate in enumerate(set(sentence_candidates)):
         candidate_proba = 1
         for i, word in enumerate(candidate):
             word_in_org_sentence = sentence_words[i]
@@ -414,5 +493,5 @@ def evaluate_text(s, lm):
         context_total_freq = _context_freq(context)
         if context_total_freq == 0:
             return 0
-        sentence_proba *= float(seq_preq) / (context_total_freq)
+        sentence_proba *= float(seq_preq + 1) / (context_total_freq + V)
     return sentence_proba
