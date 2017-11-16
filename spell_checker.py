@@ -7,7 +7,6 @@ removing all the none letter and white spaces from the sentence.
 I used laplace smoothing to handle out of vocabulary words.
 """
 import re
-from collections import Counter
 import itertools
 import sys
 import time
@@ -22,7 +21,7 @@ def timing(f):
         time1 = time.time()
         ret = f(*args)
         time2 = time.time()
-        print '%s function took %0.1f ms' % (f.func_name, (time2 - time1) * 1000.0)
+        print '%s function took %d ms' % (f.func_name, (time2 - time1) * 1000.0)
         return ret
 
     return wrap
@@ -87,6 +86,7 @@ def learn_language_model(files, n=3, lm=None):
                     prev_words.append(word)
                     if len(prev_words) == n:
                         prev_words.pop(0)
+    print("Created language model %s-gram" % n)
     return ngrams
 
 
@@ -190,60 +190,31 @@ def create_error_distribution(errors_file, lexicon):
                         i += 2
                         j += 1
                         continue
-                    # if len(correct_word) > len(error_word):
-                    #     if x_correct != x_error and i == 0:
-                    #         # substitution
-                    #         tpl = (x_error, x_correct)
-                    #         if tpl not in error_dist["substitution"]:
-                    #             error_dist["substitution"][tpl] = 0
-                    #         error_dist["substitution"][tpl] = error_dist["substitution"][tpl] + 1
-                    #         j += 1
-                    #         i += 1
-                    #         continue
-                    #     elif x_correct == x_error and xy_correct != xy_error:
-                    #         # deletion
-                    #         tpl = (x_error, xy_correct)
-                    #         if tpl not in error_dist["deletion"]:
-                    #             error_dist["deletion"][tpl] = 0
-                    #         error_dist["deletion"][tpl] = error_dist["deletion"][tpl] + 1
-                    #         i += 1
-                    #         j += 2
-                    #         continue
-                    # if len(correct_word) < len(error_word):
-                    #     if x_correct == x_error and xy_correct != xy_error:
-                    #         # insertion
-                    #         tpl = (xy_error, x_correct)
-                    #         if tpl not in error_dist["insertion"]:
-                    #             error_dist["insertion"][tpl] = 0
-                    #         error_dist["insertion"][tpl] = error_dist["insertion"][tpl] + 1
-                    #         i += 2
-                    #         j += 1
-                    #         continue
                     j += 1
                     i += 1
 
     def _get_count(s):
         return sum([word.count(s) * d[""] for word, d in lexicon.items()])
 
-    # chars = list("abcdefghijklmnopqrstuvwxyz")
-    # subs = list(itertools.combinations(chars, 2))
-    # trans = [("".join(x), "".join(x[::-1])) for x in subs]
-    # trans.extend([("".join(x[::-1]), "".join(x)) for x in subs])
-    # dels = [(x[0], "".join(x)) for x in itertools.product(*[chars+[""], chars])]
-    # adds = [("".join(x), x[0]) for x in itertools.product(*[chars, chars])]
-    #
-    # for tuple in subs:
-    #     if tuple not in error_dist["substitution"]:
-    #         error_dist["substitution"][tuple] = 0
-    # for tuple in trans:
-    #     if tuple not in error_dist["transposition"]:
-    #         error_dist["transposition"][tuple] = 0
-    # for tuple in dels:
-    #     if tuple not in error_dist["deletion"]:
-    #         error_dist["deletion"][tuple] = 0
-    # for tuple in adds:
-    #     if tuple not in error_dist["insertion"]:
-    #         error_dist["insertion"][tuple] = 0
+    chars = list("abcdefghijklmnopqrstuvwxyz")
+    subs = list(itertools.combinations(chars, 2))
+    trans = [("".join(x), "".join(x[::-1])) for x in subs]
+    trans.extend([("".join(x[::-1]), "".join(x)) for x in subs])
+    dels = [(x[0], "".join(x)) for x in itertools.product(*[chars + [""], chars])]
+    adds = [("".join(x), x[0]) for x in itertools.product(*[chars, chars])]
+
+    for tuple in subs:
+        if tuple not in error_dist["substitution"]:
+            error_dist["substitution"][tuple] = 0
+    for tuple in trans:
+        if tuple not in error_dist["transposition"]:
+            error_dist["transposition"][tuple] = 0
+    for tuple in dels:
+        if tuple not in error_dist["deletion"]:
+            error_dist["deletion"][tuple] = 0
+    for tuple in adds:
+        if tuple not in error_dist["insertion"]:
+            error_dist["insertion"][tuple] = 0
 
     total_errors = sum(sum(error_dist[key].values()) for key in error_dist.keys())
 
@@ -259,7 +230,7 @@ def create_error_distribution(errors_file, lexicon):
     for (err, corr), value in error_dist["substitution"].items():
         total = _get_count(corr)
         error_dist["substitution"][(err, corr)] = float(value + 1) / (total + total_errors)
-
+    print("Created error model")
     return error_dist
 
 
@@ -307,7 +278,7 @@ def generate_text(lm, m=15, w=None):
     return " ".join(sentence)
 
 
-def _generate_candidates_with_proba(w, errors_dist, lexicon=None):
+def _generate_candidates_with_proba(w, errors_dist, distance=1):
     """
     create a dictionary of all the candidates and the channel probability for that candidate
     :param w: a word we want to correct
@@ -321,41 +292,43 @@ def _generate_candidates_with_proba(w, errors_dist, lexicon=None):
         for i in range(len(w)):
             if w[i:i + 1] == err:
                 candidate = w[:i] + corr + w[i + 1:]
-                if (lexicon is not None) and (candidate in lexicon.keys()):
-                    correction_proba[candidate] = value
-                if lexicon is None:
-                    correction_proba[candidate] = value
+                correction_proba[candidate] = value
     for (err, corr), value in errors_dist["insertion"].items():
         for i in range(len(w) - 1):
             if w[i:i + 2] == err:
                 candidate = w[:i] + corr + w[i + 2:]
-                if (lexicon is not None) and (candidate in lexicon.keys()):
-                    correction_proba[candidate] = value
-                if lexicon is None:
-                    correction_proba[candidate] = value
+                correction_proba[candidate] = value
     for (err, corr), value in errors_dist["substitution"].items():
         for i in range(len(w)):
             if w[i:i + 1] == err:
                 candidate = w[:i] + corr + w[i + 1:]
-                if (lexicon is not None) and (candidate in lexicon.keys()):
-                    correction_proba[candidate] = value
-                if lexicon is None:
-                    correction_proba[candidate] = value
+                correction_proba[candidate] = value
             if i == 0 and err == "":
                 candidate = corr + w
-                if (lexicon is not None) and (candidate in lexicon.keys()):
-                    correction_proba[candidate] = value
-                if lexicon is None:
-                    correction_proba[candidate] = value
+                correction_proba[candidate] = value
     for (err, corr), value in errors_dist["transposition"].items():
         for i in range(len(w) - 1):
             if w[i:i + 2] == err:
                 candidate = w[:i] + corr + w[i + 2:]
-                if (lexicon is not None) and (candidate in lexicon.keys()):
-                    correction_proba[candidate] = value
-                if lexicon is None:
-                    correction_proba[candidate] = value
+                correction_proba[candidate] = value
+    if distance > 1:
+        for i in range(1, distance):
+            for word, proba in correction_proba.items():
+                tmp_dict = _generate_candidates_with_proba(word, errors_dist)
+                for key in tmp_dict.keys():
+                    tmp_dict[key] = tmp_dict[key] * proba
+                    if key not in correction_proba.keys():
+                        correction_proba[key] = tmp_dict[key]
     return correction_proba
+
+
+def _filter_word_candidates(words_proba, lexicon=None):
+    if lexicon is None:
+        return words_proba
+    keys_to_delete = set(words_proba.keys())-set(lexicon.keys())
+    for key in keys_to_delete:
+        words_proba.pop(key,None)
+    return words_proba
 
 
 def correct_word(w, word_counts, errors_dist):
@@ -373,10 +346,10 @@ def correct_word(w, word_counts, errors_dist):
     Returns:
         The most probable correction (str).
     """
-    correction_proba = _generate_candidates_with_proba(w, errors_dist)
+    correction_proba = _filter_word_candidates(_generate_candidates_with_proba(w, errors_dist, 2),word_counts)
     N, V = sum([x[""] for x in word_counts.values()]), len(word_counts)
 
-    best_correction = None
+    best_correction = w
     best_correction_score = 0
     for word, proba in correction_proba.items():
         word_proba = float(word_counts.get(word, {"": 0})[""] + 1) / (N + V)
@@ -407,7 +380,9 @@ def correct_sentence(s, lm, err_dist, c=2, alpha=0.95):
 
     """
     sentence_words = [x for x in _normalize_text(s).split(" ") if x != ""]
-    sentence_word_candidates = [_generate_candidates_with_proba(w, err_dist,lm).keys() for w in sentence_words]
+    sentence_word_candidates = [
+        _filter_word_candidates(_generate_candidates_with_proba(w, err_dist, distance=2), lexicon=lm).keys() for w in
+        sentence_words]
     for i in range(len(sentence_words)):
         sentence_word_candidates[i].append(sentence_words[i])
 
