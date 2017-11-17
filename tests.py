@@ -3,19 +3,14 @@ from spell_checker import learn_language_model, create_error_distribution, _norm
 from collections import Counter
 
 if __name__ == '__main__':
-    lm = learn_language_model(["data/trump_historical_tweets.txt", "data/big.txt"], 3, None)
-    error_dist = create_error_distribution("data/wikipedia_common_misspellings.txt")
-    words = []
-    with open("data/trump_historical_tweets.txt", "r") as f:
-        for line in f:
-            cleaned_line = _normalize_text(line)
-            words = words + [x for x in cleaned_line.split(" ") if x != ""]
-    word_freq = Counter(words)
-    print(correct_word("idae", word_freq, error_dist))
-    print(evaluate_text(
-        "@Janetlarose1: @realDonaldTrump @FaceTheNation @jdickerson WASHINGTON VERSUS TRUMP  &TRUMPS SUPPORTERS ... #TRUMPDOG",
-        # TODO choose different sentence
-        lm))
+    # lm = learn_language_model(["data/big.txt"], 3, None)
+    lexicon = learn_language_model(["data/error_dist_test_text.txt"], 1, None)
+    error_dist = create_error_distribution("data/error_dist_test.txt",lexicon)
+    print(correct_word("idae", lexicon, error_dist))
+    # print(evaluate_text(
+    #     "@Janetlarose1: @realDonaldTrump @FaceTheNation @jdickerson WASHINGTON VERSUS TRUMP  &TRUMPS SUPPORTERS ... #TRUMPDOG",
+    #     # TODO choose different sentence
+    #     lm))
     # for _ in range(5):
     #     print(generate_text(lm))
     print(correct_sentence("how aer you", lm, error_dist))

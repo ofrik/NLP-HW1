@@ -70,7 +70,8 @@ def learn_language_model(files, n=3, lm=None):
 
     for file in files:
         with open(file, "r") as f:
-            for line in _sentence_tokenizer(f.read()):
+            # for line in _sentence_tokenizer(f.read()):
+            for line in f.readlines():
                 prev_words = []
                 if line == "":
                     continue
@@ -278,6 +279,12 @@ def generate_text(lm, m=15, w=None):
     return " ".join(sentence)
 
 
+candidates_cache_2 = {}
+candidates_cache_1 = {}
+last_error_dist = {}
+
+
+# @timing
 def _generate_candidates_with_proba(w, errors_dist, distance=1):
     """
     create a dictionary of all the candidates and the channel probability for that candidate
@@ -287,18 +294,29 @@ def _generate_candidates_with_proba(w, errors_dist, distance=1):
                             create_error_distribution()
     :return: dictionary {str:prob} of all the candidates and their probabilities
     """
+    if distance == 1:
+        if w in candidates_cache_1.keys():
+            return candidates_cache_1[w]
+    elif distance == 2:
+        if w in candidates_cache_2.keys():
+            return candidates_cache_2[w]
+
     correction_proba = {}
-    for (err, corr), value in errors_dist["deletion"].items():
+    deletions = errors_dist["deletion"].items()
+    insertions = errors_dist["insertion"].items()
+    substitutions = errors_dist["substitution"].items()
+    transpositions = errors_dist["transposition"].items()
+    for (err, corr), value in deletions:
         for i in range(len(w)):
             if w[i:i + 1] == err:
                 candidate = w[:i] + corr + w[i + 1:]
                 correction_proba[candidate] = value
-    for (err, corr), value in errors_dist["insertion"].items():
+    for (err, corr), value in insertions:
         for i in range(len(w) - 1):
             if w[i:i + 2] == err:
                 candidate = w[:i] + corr + w[i + 2:]
                 correction_proba[candidate] = value
-    for (err, corr), value in errors_dist["substitution"].items():
+    for (err, corr), value in substitutions:
         for i in range(len(w)):
             if w[i:i + 1] == err:
                 candidate = w[:i] + corr + w[i + 1:]
@@ -306,28 +324,38 @@ def _generate_candidates_with_proba(w, errors_dist, distance=1):
             if i == 0 and err == "":
                 candidate = corr + w
                 correction_proba[candidate] = value
-    for (err, corr), value in errors_dist["transposition"].items():
+    for (err, corr), value in transpositions:
         for i in range(len(w) - 1):
             if w[i:i + 2] == err:
                 candidate = w[:i] + corr + w[i + 2:]
                 correction_proba[candidate] = value
     if distance > 1:
         for i in range(1, distance):
-            for word, proba in correction_proba.items():
+            items = correction_proba.items()
+            for word, proba in items:
                 tmp_dict = _generate_candidates_with_proba(word, errors_dist)
-                for key in tmp_dict.keys():
+                keys1 = tmp_dict.keys()
+                keys2 = correction_proba.keys()
+                for key in keys1:
                     tmp_dict[key] = tmp_dict[key] * proba
-                    if key not in correction_proba.keys():
+                    if key not in keys2:
                         correction_proba[key] = tmp_dict[key]
+
+    if distance == 1:
+        if w not in candidates_cache_1.keys():
+            candidates_cache_1[w] = correction_proba
+    elif distance == 2:
+        if w not in candidates_cache_2.keys():
+            candidates_cache_2[w] = correction_proba
     return correction_proba
 
 
 def _filter_word_candidates(words_proba, lexicon=None):
     if lexicon is None:
         return words_proba
-    keys_to_delete = set(words_proba.keys())-set(lexicon.keys())
+    keys_to_delete = set(words_proba.keys()) - set(lexicon.keys())
     for key in keys_to_delete:
-        words_proba.pop(key,None)
+        words_proba.pop(key, None)
     return words_proba
 
 
@@ -346,7 +374,7 @@ def correct_word(w, word_counts, errors_dist):
     Returns:
         The most probable correction (str).
     """
-    correction_proba = _filter_word_candidates(_generate_candidates_with_proba(w, errors_dist, 2),word_counts)
+    correction_proba = _filter_word_candidates(_generate_candidates_with_proba(w, errors_dist, 2), word_counts)
     N, V = sum([x[""] for x in word_counts.values()]), len(word_counts)
 
     best_correction = w
@@ -381,12 +409,10 @@ def correct_sentence(s, lm, err_dist, c=2, alpha=0.95):
     """
     sentence_words = [x for x in _normalize_text(s).split(" ") if x != ""]
     sentence_word_candidates = [
-        _filter_word_candidates(_generate_candidates_with_proba(w, err_dist, distance=2), lexicon=lm).keys() for w in
+        _filter_word_candidates(_generate_candidates_with_proba(w, err_dist, 2), lm).items() for w in
         sentence_words]
     for i in range(len(sentence_words)):
-        sentence_word_candidates[i].append(sentence_words[i])
-
-    cands_cache = {}
+        sentence_word_candidates[i].append((sentence_words[i], alpha))
 
     def _p(x, w):
         """
@@ -397,12 +423,8 @@ def correct_sentence(s, lm, err_dist, c=2, alpha=0.95):
         """
         if x == w:
             return alpha
-        if w not in cands_cache:
-            cands_cache[w] = _generate_candidates_with_proba(w, err_dist)
-        all_cands_for_w = cands_cache[w]
-        if x in lm.keys():
-            return (1 - alpha) / len(all_cands_for_w)
-        return 0.0
+        all_cands_for_w = _generate_candidates_with_proba(w, err_dist)
+        return (1 - alpha) / len(all_cands_for_w)
 
     def _generate_sentence_candicate(n):
         """
@@ -420,7 +442,7 @@ def correct_sentence(s, lm, err_dist, c=2, alpha=0.95):
                 if i in indexes:
                     candidate_words.append(sentence_word_candidates[i])
                 else:
-                    candidate_words.append([word])
+                    candidate_words.append([(word, alpha)])
             candidates += itertools.product(*candidate_words)
         return candidates
 
@@ -435,14 +457,17 @@ def correct_sentence(s, lm, err_dist, c=2, alpha=0.95):
 
     for j, candidate in enumerate(set(sentence_candidates)):
         candidate_proba = 1
-        for i, word in enumerate(candidate):
+        for i, (word, proba) in enumerate(candidate):
             word_in_org_sentence = sentence_words[i]
             candidate_proba *= _p(word, word_in_org_sentence)
+            # candidate_proba *= (
+            #     alpha if word == word_in_org_sentence else float(1 - alpha) / len(sentence_word_candidates[i]))
+            # candidate_proba *= proba
         if candidate_proba != 0:
-            candidate_proba *= evaluate_text(" ".join(candidate), n, lm)
+            candidate_proba *= evaluate_text(" ".join([x[0] for x in candidate]), n, lm)
         if best_candidate_proba < candidate_proba:
             best_candidate_proba = candidate_proba
-            best_candidate = " ".join(candidate)
+            best_candidate = " ".join([x[0] for x in candidate])
     return best_candidate
 
 
@@ -464,10 +489,13 @@ def evaluate_text(s, n, lm):
         The likelihood of the sentence according to the language model (float).
     """
 
-    hashkey = hash(frozenset(lm.get("").keys()))
-    if hashkey not in lm_cache:
-        lm_cache[hashkey] = sum([sum(v.values()) for v in lm.values()])
-    V = lm_cache[hashkey]
+    def _get_vocab():
+        hashkey = str(len(lm)) + "_" + str(n)
+        if hashkey not in lm_cache:
+            lm_cache[hashkey] = sum([sum(v.values()) for v in lm.values()])
+        return lm_cache[hashkey]
+
+    V = _get_vocab()
 
     s = _normalize_text(s)
     # n = max([len(x.split(" ")) for x in lm[lm.keys()[0]].keys()])
@@ -486,7 +514,7 @@ def evaluate_text(s, n, lm):
     sentence_proba = 1
     for i, word in enumerate(s_words):
         context = " ".join(s_words[max(0, i - n):i])
-        seq_preq = lm.get(word, {"": 0}).get(context, 0)
+        seq_freq = lm.get(word, {"": 0}).get(context, 0)
         context_total_freq = _context_freq(context)
-        sentence_proba *= float(seq_preq + 1) / (context_total_freq + V)
+        sentence_proba *= float(seq_freq + 1) / (context_total_freq + V)
     return sentence_proba
