@@ -217,7 +217,7 @@ def create_error_distribution(errors_file, lexicon):
         if tuple not in error_dist["insertion"]:
             error_dist["insertion"][tuple] = 0
 
-    total_errors = sum(sum(error_dist[key].values()) for key in error_dist.keys())
+    total_errors = sum(sum(error_dist[key].values()) for key in error_dist)
 
     for (err, corr), value in error_dist["deletion"].items():
         total = _get_count(corr)
@@ -295,10 +295,10 @@ def _generate_candidates_with_proba(w, errors_dist, distance=1):
     :return: dictionary {str:prob} of all the candidates and their probabilities
     """
     if distance == 1:
-        if w in candidates_cache_1.keys():
+        if w in candidates_cache_1:
             return candidates_cache_1[w]
     elif distance == 2:
-        if w in candidates_cache_2.keys():
+        if w in candidates_cache_2:
             return candidates_cache_2[w]
 
     correction_proba = {}
@@ -334,18 +334,16 @@ def _generate_candidates_with_proba(w, errors_dist, distance=1):
             items = correction_proba.items()
             for word, proba in items:
                 tmp_dict = _generate_candidates_with_proba(word, errors_dist)
-                keys1 = tmp_dict.keys()
-                keys2 = correction_proba.keys()
-                for key in keys1:
+                for key in tmp_dict:
                     tmp_dict[key] = tmp_dict[key] * proba
-                    if key not in keys2:
+                    if key not in correction_proba:
                         correction_proba[key] = tmp_dict[key]
 
     if distance == 1:
-        if w not in candidates_cache_1.keys():
+        if w not in candidates_cache_1:
             candidates_cache_1[w] = correction_proba
     elif distance == 2:
-        if w not in candidates_cache_2.keys():
+        if w not in candidates_cache_2:
             candidates_cache_2[w] = correction_proba
     return correction_proba
 
@@ -508,7 +506,7 @@ def evaluate_text(s, n, lm):
         :return: the frequency of specific context
         """
         if context not in context_cache:
-            context_cache[context] = sum([lm.get(word).get(context, 0) for word in lm.keys()])
+            context_cache[context] = sum([lm.get(word).get(context, 0) for word in lm])
         return context_cache[context]
 
     sentence_proba = 1
