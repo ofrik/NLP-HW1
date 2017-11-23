@@ -349,6 +349,12 @@ def _generate_candidates_with_proba(w, errors_dist, distance=1):
 
 
 def _filter_word_candidates(words_proba, lexicon=None):
+    """
+    filter words out of vocab and duplicates
+    :param words_proba: dictionary of words and their probabilities according to the error model
+    :param lexicon: dictionary of the vocab
+    :return: subset of the original words_proba
+    """
     if lexicon is None:
         return words_proba
     keys_to_delete = set(words_proba.keys()) - set(lexicon.keys())
